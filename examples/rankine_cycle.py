@@ -74,8 +74,10 @@ def main():
             print(f"  {w}")
 
     # Solve for steady state
-    print("Solving Rankine cycle for steady state...")
-    result = graph.solve_steady_state()
+    # TODO_IDA Phase 2: Replace solve_sequential() with solve_steady_state() once SUNDIALS IDA is integrated
+    # The sequential solver is a temporary workaround for the coupled algebraic system
+    print("Solving Rankine cycle (using temporary sequential solver)...")
+    result = graph.solve_sequential()  # TEMPORARY - will be solve_steady_state() with IDA
 
     if result.success:
         print(f"✓ Solution converged (residual norm: {np.linalg.norm(result.fun):.2e})")

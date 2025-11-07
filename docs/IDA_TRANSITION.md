@@ -1,0 +1,401 @@
+# SUNDIALS IDA Transition Guide (Phase 2)
+
+## Overview
+
+This document provides a detailed roadmap for transitioning from the temporary sequential solver to the proper SUNDIALS IDA DAE solver. This transition is **Phase 2** of the project roadmap.
+
+**Current Status (Phase 1 - MVP)**: Using `solve_sequential()` - a temporary workaround that propagates states around the cycle sequentially and uses root finding to close the loop.
+
+**Phase 2 Goal**: Replace with `solve_steady_state()` using SUNDIALS IDA - a proper DAE solver that solves all equations simultaneously.
+
+## Why This Transition is Necessary
+
+### Current Limitations (Sequential Solver)
+1. **Topology Restrictions**: Only handles 4-component cycles with known ordering
+2. **Manual Propagation**: Requires hardcoded sequential state updates
+3. **Limited Convergence**: Root finding on a single variable (mdot) may fail for complex cycles
+4. **Not Scalable**: Doesn't generalize to arbitrary component graphs
+5. **Temporary Hacks**: Bounds checking and error handling to guide solver away from invalid regions
+
+### Benefits of SUNDIALS IDA
+1. **Simultaneous Solution**: Solves all component equations at once
+2. **General Topology**: Works with any DAG (directed acyclic graph) or cycles
+3. **Robust Convergence**: Newton-Krylov methods with adaptive step sizing
+4. **DAE-Native**: Designed for differential-algebraic equations M(x)·ẋ = f(x,t)
+5. **Industry Standard**: Used in real engineering simulation tools
+
+## Phase 2 Implementation Steps
+
+### Step 1: Install SUNDIALS IDA
+
+**System Dependencies** (Ubuntu/Debian):
+```bash
+sudo apt-get update
+sudo apt-get install -y libsundials-dev swig
+```
+
+**Python Package**:
+```bash
+pip install scikits.odes>=2.7.0
+```
+
+**Verify Installation**:
+```python
+from scikits.odes import dae
+print("SUNDIALS IDA available!")
+```
+
+### Step 2: Update `ThermalGraph.solve_steady_state()`
+
+**File**: `thermal_sim/core/graph.py`
+
+**Current Implementation** (lines ~305-513):
+```python
+def solve_sequential(self, max_iter: int = 100, tol: float = 1e-6):
+    """⚠️ TEMPORARY SOLVER - REPLACE WITH SUNDIALS IDA (Phase 2) ⚠️"""
+    # Sequential propagation logic...
+    # Uses brentq to find mdot that closes loop
+```
+
+**Phase 2 Implementation**:
+```python
+def solve_steady_state(self, t_span=(0, 1), rtol=1e-6, atol=1e-8):
+    """
+    Solve for steady-state using SUNDIALS IDA DAE solver.
+
+    This solver handles general DAE systems of the form:
+        M(x) · dx/dt = f(x, t)
+
+    For steady-state problems where all derivatives are zero:
+        0 = f(x, t)
+
+    Parameters
+    ----------
+    t_span : tuple
+        Time span (start, end). For steady-state, just use (0, 1).
+    rtol : float
+        Relative tolerance for solver convergence.
+    atol : float
+        Absolute tolerance for solver convergence.
+
+    Returns
+    -------
+    result : DAESolution
+        Solution object with attributes:
+        - success: bool
+        - message: str
+        - values: Solution values at final time
+        - errors: Residual errors
+    """
+    from scikits.odes import dae
+
+    # Assemble system
+    residual_func, y0 = self.assemble()
+
+    # For steady-state, all variables are algebraic (no differential equations)
+    algvar_flags = np.ones(len(y0))  # 1 = algebraic variable
+
+    # SUNDIALS IDA requires derivatives y' as well as y
+    # For steady-state, y' = 0 initially
+    yp0 = np.zeros(len(y0))
+
+    # Create DAE solver
+    solver = dae(
+        'ida',
+        residual_func,  # f(t, y, yp, result)
+        algebraic_vars_idx=algvar_flags,
+        rtol=rtol,
+        atol=atol,
+        old_api=False  # Use new API
+    )
+
+    # Solve
+    solution = solver.solve(t_span, y0, yp0)
+
+    # Extract steady-state values (last time point)
+    if solution.flag >= 0:  # Success
+        y_final = solution.values.y[-1]
+
+        # Evaluate final residual
+        residual_final = np.zeros(len(y0))
+        residual_func(t_span[1], y_final, yp0, residual_final)
+
+        return type('DAESolution', (), {
+            'success': True,
+            'message': 'Steady-state solution converged',
+            'x': y_final,  # For compatibility with current API
+            'fun': residual_final,
+            'values': solution.values,
+            'errors': solution.errors
+        })()
+    else:
+        return type('DAESolution', (), {
+            'success': False,
+            'message': solution.message,
+            'x': y0,
+            'fun': np.full(len(y0), np.inf)
+        })()
+```
+
+**Key Changes**:
+1. Import `from scikits.odes import dae`
+2. Set all variables as algebraic: `algvar_flags = np.ones(len(y0))`
+3. Initialize derivatives to zero: `yp0 = np.zeros(len(y0))`
+4. Create IDA solver with algebraic variable flags
+5. Return standardized solution object
+
+### Step 3: Update Component Initial Conditions
+
+**Why**: IDA benefits from better initial guesses than the sequential solver.
+
+**Files**: All components in `thermal_sim/components/`
+
+**Recommended Approach**:
+1. Keep current `get_initial_state()` methods
+2. Optionally add a `compute_thermodynamic_initial_state()` helper that uses CoolProp
+3. For complex systems, consider using sequential solver output as initial guess for IDA
+
+**Example** (optional enhancement):
+```python
+def get_initial_state_from_pressures(self, P_in, P_out=None):
+    """Compute thermodynamically consistent initial state."""
+    if P_out is None:
+        P_out = self.P_out
+
+    # Use CoolProp to get realistic enthalpy values
+    # This is optional - current fixed values work fine
+    h_in = self.fluid.enthalpy_from_pt(P_in, 500.0)  # Reasonable temp
+    # ... component-specific logic
+```
+
+### Step 4: Update Examples
+
+**File**: `examples/rankine_cycle.py`
+
+**Current Code** (lines 77-80):
+```python
+# TODO_IDA Phase 2: Replace solve_sequential() with solve_steady_state() once SUNDIALS IDA is integrated
+# The sequential solver is a temporary workaround for the coupled algebraic system
+print("Solving Rankine cycle (using temporary sequential solver)...")
+result = graph.solve_sequential()  # TEMPORARY - will be solve_steady_state() with IDA
+```
+
+**Phase 2 Update**:
+```python
+# Solve for steady state using SUNDIALS IDA
+print("Solving Rankine cycle...")
+result = graph.solve_steady_state()
+```
+
+**That's it!** All TODO_IDA comments can be removed.
+
+### Step 5: Remove Sequential Solver
+
+**File**: `thermal_sim/core/graph.py`
+
+**Action**: Delete entire `solve_sequential()` method (lines ~305-513)
+
+**Why**: No longer needed - IDA handles everything the sequential solver did, plus more.
+
+### Step 6: Update Tests
+
+**File**: `tests/integration/test_rankine.py`
+
+**Current** (if exists):
+```python
+result = graph.solve_sequential()
+```
+
+**Phase 2 Update**:
+```python
+result = graph.solve_steady_state()
+```
+
+**New Test Cases to Add**:
+1. Test with different solver tolerances
+2. Test convergence from poor initial guesses
+3. Test with modified cycle topologies (e.g., reheat Rankine)
+4. Verify residual norms are below tolerance
+
+### Step 7: Update Documentation
+
+**Files to Update**:
+- `README.md`: Change solver description
+- `ARCHITECTURE.md`: Update Section 8 (Solver Infrastructure)
+- `CLAUDE.md`: Remove sequential solver references
+- `docs/IDA_TRANSITION.md`: Mark as "COMPLETED" at top
+
+**README.md Example**:
+```markdown
+## Solver
+
+The simulator uses **SUNDIALS IDA** for solving the coupled differential-algebraic
+equations that arise from component interconnections. IDA is an industry-standard
+DAE solver that handles:
+- Simultaneous solution of all component equations
+- Arbitrary component topologies (including cycles)
+- Robust convergence for stiff systems
+```
+
+## Migration Checklist
+
+Use this checklist when performing the Phase 2 transition:
+
+- [ ] **Environment Setup**
+  - [ ] Install `libsundials-dev` system package
+  - [ ] Install `scikits.odes` Python package
+  - [ ] Verify import: `from scikits.odes import dae`
+
+- [ ] **Code Changes**
+  - [ ] Implement new `solve_steady_state()` in `graph.py`
+  - [ ] Update `examples/rankine_cycle.py`
+  - [ ] Update any other examples in `examples/`
+  - [ ] Delete `solve_sequential()` method
+  - [ ] Remove all `# TODO_IDA:` comments
+
+- [ ] **Testing**
+  - [ ] Run `pytest tests/integration/test_rankine.py`
+  - [ ] Verify efficiency still in 30-40% range
+  - [ ] Check residual norms < 1e-6
+  - [ ] Test with different rtol/atol values
+  - [ ] Validate against compute_rankine_states.py output
+
+- [ ] **Documentation**
+  - [ ] Update README.md solver section
+  - [ ] Update ARCHITECTURE.md Section 8
+  - [ ] Update CLAUDE.md to remove sequential solver
+  - [ ] Mark this file as COMPLETED
+
+- [ ] **Validation**
+  - [ ] Compare IDA results to sequential solver results
+  - [ ] Efficiency should match (±0.5%)
+  - [ ] Component powers should match (±1%)
+  - [ ] Mass flow rates should match (±0.1%)
+
+## Expected Behavior Changes
+
+### Performance
+- **Startup Time**: Slightly slower (IDA initialization overhead)
+- **Convergence Time**: May be faster for complex systems
+- **Memory Usage**: Slightly higher (IDA internal state)
+
+### Convergence
+- **Robustness**: Better - handles larger deviations from initial guess
+- **Failure Modes**: Different error messages (IDA-specific)
+- **Tolerance**: More consistent across different cycle configurations
+
+### Results
+- **Accuracy**: Should be identical within solver tolerances
+- **Efficiency**: Expect ±0.1% variation due to different numerical methods
+- **Residuals**: IDA may achieve lower residual norms
+
+## Troubleshooting Phase 2 Issues
+
+### Issue: IDA fails to converge
+
+**Symptoms**: `solution.flag < 0` or "IDA_CONV_FAIL" error
+
+**Solutions**:
+1. Check initial conditions: `print(y0)` - look for NaN, Inf, or zeros
+2. Tighten tolerances: `rtol=1e-8, atol=1e-10`
+3. Verify port initialization in component constructors
+4. Try using sequential solver output as initial guess:
+   ```python
+   seq_result = graph.solve_sequential()
+   y0 = seq_result.x
+   # Then pass y0 to solve_steady_state()
+   ```
+
+### Issue: "Algebraic variable has non-zero derivative"
+
+**Symptoms**: Error during IDA setup
+
+**Solution**: Ensure `yp0 = np.zeros(len(y0))` for all steady-state problems.
+
+### Issue: CoolProp errors during IDA solve
+
+**Symptoms**: "Input out of range" from CoolProp
+
+**Solution**:
+1. Add bounds checking in component `residual()` methods
+2. Initialize ports with physically valid values in constructors
+3. Use IDA's constraint options to keep variables in valid ranges
+
+### Issue: Results differ from sequential solver
+
+**Symptoms**: Efficiency changes by >1%
+
+**Investigation**:
+1. Check residual norms: `np.linalg.norm(result.fun)`
+2. Print component states: `graph.get_component_state(result, 'turbine')`
+3. Verify port values after solution
+4. Check for coding errors in residual equations
+
+## References
+
+### SUNDIALS IDA Documentation
+- Official: https://computing.llnl.gov/projects/sundials/ida
+- scikits.odes API: https://scikits-odes.readthedocs.io/
+
+### Relevant Code Locations
+- Current solver: `thermal_sim/core/graph.py:305-513` (`solve_sequential()`)
+- Target solver: `thermal_sim/core/graph.py` (new `solve_steady_state()`)
+- Component residuals: `thermal_sim/components/*.py` (no changes needed)
+
+### Example DAE Systems
+For reference on using SUNDIALS IDA, see:
+- scikits.odes examples: https://github.com/bmcage/odes/tree/master/ipython_examples
+- SUNDIALS C examples: https://github.com/LLNL/sundials/tree/main/examples/ida
+
+## Appendix: Residual Function Interface
+
+The residual function interface does NOT need to change for IDA. However, for reference:
+
+**Current Interface** (used by both sequential solver and will be used by IDA):
+```python
+def residual_func(t, y):
+    """Evaluate system residuals."""
+    residuals = np.zeros(len(y))
+    # ... populate residuals from component equations
+    return residuals
+```
+
+**IDA Interface** (scikits.odes):
+```python
+def residual_func_ida(t, y, yp, result):
+    """
+    Evaluate DAE residuals: f(t, y, y') = 0
+
+    Parameters
+    ----------
+    t : float
+        Current time
+    y : ndarray
+        State variables
+    yp : ndarray
+        Derivatives (dy/dt)
+    result : ndarray (output)
+        Residual values to populate
+    """
+    # For steady-state algebraic equations: f(y) = 0
+    # yp will be zero, so ignore it
+    residuals = np.zeros(len(y))
+    # ... component residual evaluation
+    result[:] = residuals
+```
+
+**Adapter** (if needed):
+```python
+# If existing residual_func has signature residual_func(t, y)
+def residual_func_ida(t, y, yp, result):
+    result[:] = residual_func(t, y)
+```
+
+However, this adapter is usually not needed - just define `residual_func` with the IDA signature from the start.
+
+---
+
+**Document Version**: 1.0.0
+**Created**: 2025-11-07
+**Status**: ACTIVE - Phase 2 implementation pending
+**Next Review**: When Phase 2 begins

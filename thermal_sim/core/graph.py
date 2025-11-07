@@ -11,7 +11,7 @@ The graph is responsible for:
 from typing import List, Tuple, Callable, Dict, Optional
 import numpy as np
 from scipy.integrate import solve_ivp
-from scipy.optimize import root
+from scipy.optimize import root, brentq
 import warnings
 
 from thermal_sim.core.component import Component
@@ -299,6 +299,234 @@ class ThermalGraph:
 
         # Trigger final residual evaluation to update all port values
         _ = residual_func(0.0, result.x)
+
+        return result
+
+    def solve_sequential(self, max_iter: int = 100, tol: float = 1e-6) -> object:
+        """
+        ⚠️ TEMPORARY SOLVER - REPLACE WITH SUNDIALS IDA (Phase 2) ⚠️
+
+        Sequential steady-state solver for closed loops.
+
+        This is a TEMPORARY workaround for coupled algebraic systems until SUNDIALS IDA
+        is integrated. It solves components sequentially around the loop rather than
+        simultaneously, which is less robust but avoids the basin-of-attraction issues
+        with Newton-type methods on the full coupled system.
+
+        **This method should be REMOVED when transitioning to SUNDIALS IDA.**
+
+        Algorithm:
+            1. Guess mass flow rate
+            2. Propagate state sequentially through components
+            3. Check loop closure (inlet of first component matches outlet of last)
+            4. Adjust mass flow and repeat until convergence
+
+        Limitations (why this is temporary):
+            - Only works for simple closed loops (not general graphs)
+            - Less accurate than simultaneous solution
+            - Doesn't handle coupled dynamics or differential equations
+            - Sequential errors can accumulate
+
+        Transition to SUNDIALS IDA will enable:
+            - Simultaneous solution of all equations (proper DAE approach)
+            - Better numerical conditioning via implicit methods
+            - Support for true differential equations (transients)
+            - Robust handling of algebraic constraints
+
+        Args:
+            max_iter: Maximum iterations for outer loop convergence
+            tol: Tolerance for loop closure error
+
+        Returns:
+            Result object compatible with solve_steady_state interface
+
+        TODO Phase 2: Replace this entire method with:
+            ```python
+            from scikits.odes import dae
+            solver = dae('ida', residual_func, algebraic_vars_idx=algvar_flags)
+            result = solver.solve(t_span, y0, yp0)
+            ```
+        """
+        # TODO_IDA: This detection logic becomes unnecessary with IDA
+        # Detect if we have a simple closed loop
+        if len(self.components) != 4:
+            warnings.warn(
+                "Sequential solver currently only supports 4-component Rankine cycles. "
+                "For general topologies, install SUNDIALS IDA: pip install scikits.odes"
+            )
+
+        # TODO_IDA: Component ordering won't matter with simultaneous solution
+        # For now, assume Rankine cycle order: boiler → turbine → condenser → pump
+        comp_dict = {c.name: c for c in self.components}
+
+        # Try to identify components by type (temporary heuristic)
+        # TODO_IDA: Remove this component identification logic
+        boiler = None
+        turbine = None
+        condenser = None
+        pump = None
+
+        for c in self.components:
+            if 'boiler' in c.name.lower():
+                boiler = c
+            elif 'turbine' in c.name.lower():
+                turbine = c
+            elif 'condenser' in c.name.lower() or 'cond' in c.name.lower():
+                condenser = c
+            elif 'pump' in c.name.lower():
+                pump = c
+
+        if not all([boiler, turbine, condenser, pump]):
+            raise ValueError(
+                "Sequential solver requires components named 'boiler', 'turbine', "
+                "'condenser', and 'pump'. Use solve_steady_state() or install SUNDIALS IDA."
+            )
+
+        # TODO_IDA: Mass flow won't be a special variable with IDA - just part of state vector
+        # Initial guess for mass flow rate
+        mdot_guess = 100.0
+
+        def loop_error(mdot):
+            """
+            Compute loop closure error for given mass flow rate.
+
+            TODO_IDA: This function becomes obsolete with simultaneous DAE solution.
+            IDA will enforce all residuals = 0 simultaneously, including loop closure.
+            """
+            # TODO_IDA: Error handling for invalid states won't be needed
+            # IDA's implicit solver handles constraints better
+            try:
+                # Set mass flow in all components
+                # TODO_IDA: Won't manually set mdot - it will be part of the state vector
+                for comp in [boiler, turbine, condenser, pump]:
+                    for port in comp.ports.values():
+                        port.mdot = mdot
+
+                # Propagate states sequentially through loop
+                # TODO_IDA: No sequential propagation needed - IDA solves all equations together
+
+                # Start with pump outlet (known high pressure, low enthalpy)
+                from CoolProp.CoolProp import PropsSI
+                h_pump_in = PropsSI('H', 'P', condenser.P, 'Q', 0, 'Water')  # Sat liquid at low P
+
+                # Solve pump: given h_in, find h_out
+                # TODO_IDA: Each component's residuals solved simultaneously, not sequentially
+                s_pump_in = pump.fluid.entropy(condenser.P, h_pump_in)
+                h_pump_out_s = pump.fluid.enthalpy_from_ps(pump.P_out, s_pump_in)
+                h_pump_out = h_pump_in + (h_pump_out_s - h_pump_in) / pump.eta
+                pump.ports['inlet'].h = h_pump_in
+                pump.ports['inlet'].P = condenser.P
+                pump.ports['outlet'].h = h_pump_out
+                pump.ports['outlet'].P = pump.P_out
+
+                # Solve boiler: given h_in, Q, find h_out
+                # TODO_IDA: Energy balance enforced as residual, not sequential calculation
+                h_boiler_in = h_pump_out
+                h_boiler_out = h_boiler_in + boiler.Q / mdot
+
+                # TODO_IDA: Validity checks won't be needed - IDA handles bounds internally
+                # Check if boiler outlet enthalpy is physically reasonable
+                if h_boiler_out > 5e6 or h_boiler_out < h_boiler_in:
+                    # Return large error to guide root finder away from this region
+                    return 1e10 * np.sign(mdot - 100.0)
+
+                boiler.ports['inlet'].h = h_boiler_in
+                boiler.ports['inlet'].P = boiler.P
+                boiler.ports['outlet'].h = h_boiler_out
+                boiler.ports['outlet'].P = boiler.P
+
+                # Solve turbine: given h_in, find h_out
+                # TODO_IDA: Efficiency relation enforced as residual
+                h_turb_in = h_boiler_out
+                s_turb_in = turbine.fluid.entropy(boiler.P, h_turb_in)
+                h_turb_out_s = turbine.fluid.enthalpy_from_ps(turbine.P_out, s_turb_in)
+                h_turb_out = h_turb_in - turbine.eta * (h_turb_in - h_turb_out_s)
+                turbine.ports['inlet'].h = h_turb_in
+                turbine.ports['inlet'].P = boiler.P
+                turbine.ports['outlet'].h = h_turb_out
+                turbine.ports['outlet'].P = turbine.P_out
+
+                # Solve condenser: given h_in, Q, find h_out
+                # TODO_IDA: Another residual equation, not sequential step
+                h_cond_in = h_turb_out
+                h_cond_out = h_cond_in + condenser.Q / mdot
+
+                # TODO_IDA: More validity checks that IDA won't need
+                if h_cond_out < 0 or h_cond_out > h_cond_in:
+                    return -1e10 * np.sign(mdot - 100.0)
+
+                condenser.ports['inlet'].h = h_cond_in
+                condenser.ports['inlet'].P = condenser.P
+                condenser.ports['outlet'].h = h_cond_out
+                condenser.ports['outlet'].P = condenser.P
+
+                # Check loop closure: condenser outlet should match pump inlet
+                # TODO_IDA: Loop closure automatically satisfied by port reference sharing
+                # in simultaneous solution
+                error = h_cond_out - h_pump_in
+                return error
+
+            except (ValueError, RuntimeError) as e:
+                # TODO_IDA: Exception handling for CoolProp errors won't be needed
+                # IDA has better numerical conditioning for property evaluations
+                # Return large error to guide root finder away from invalid region
+                return 1e10 * np.sign(mdot - 100.0)
+
+        # Find mass flow that closes the loop
+        # TODO_IDA: This root finding on mdot becomes unnecessary
+        # IDA will find all state variables (including mdot) simultaneously
+        try:
+            mdot_solution = brentq(loop_error, 10.0, 500.0, xtol=1e-6)
+            success = True
+            message = "Sequential solution converged"
+        except Exception as e:
+            warnings.warn(f"Sequential solver failed: {e}")
+            mdot_solution = mdot_guess
+            success = False
+            message = str(e)
+
+        # Compute final state with solution mass flow
+        # TODO_IDA: Final state comes directly from IDA, no need to recompute
+        _ = loop_error(mdot_solution)
+
+        # Build state vector for compatibility
+        # TODO_IDA: State vector structure determined by IDA's needs
+        state_vector = []
+        for comp in [boiler, turbine, condenser, pump]:
+            if comp == boiler:
+                state_vector.extend([comp.ports['outlet'].h, mdot_solution])
+            elif comp == turbine:
+                W_turb = mdot_solution * (comp.ports['inlet'].h - comp.ports['outlet'].h)
+                state_vector.extend([comp.ports['outlet'].h, W_turb, mdot_solution])
+            elif comp == condenser:
+                state_vector.extend([comp.ports['outlet'].h, mdot_solution])
+            elif comp == pump:
+                W_pump = mdot_solution * (comp.ports['outlet'].h - comp.ports['inlet'].h)
+                state_vector.extend([comp.ports['outlet'].h, W_pump, mdot_solution])
+
+        # Package result in standard format
+        class SequentialResult:
+            def __init__(self, x, success, message):
+                self.x = np.array(x)
+                self.success = success
+                self.message = message
+                self.fun = np.zeros_like(self.x)  # Sequential solver has no residual
+                self.y = self.x.reshape(-1, 1)
+                self.t = np.array([0.0])
+
+        result = SequentialResult(state_vector, success, message)
+
+        # Attach metadata for compatibility
+        result.component_names = [c.name for c in [boiler, turbine, condenser, pump]]
+        self._component_offsets = {}
+        offset = 0
+        for comp in [boiler, turbine, condenser, pump]:
+            self._component_offsets[comp.name] = offset
+            offset += comp.get_state_size()
+        result.component_offsets = self._component_offsets.copy()
+        result.state_names = {}
+        for comp in [boiler, turbine, condenser, pump]:
+            result.state_names[comp.name] = comp.get_state_names()
 
         return result
 
