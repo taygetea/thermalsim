@@ -132,9 +132,25 @@ def assemble(self):
 7 · Solver Layer
 7.1 Primary Backends
 Type	Library	Notes
-DAE	SUNDIALS IDA	canonical solver
+DAE	SUNDIALS IDA	canonical solver (Phase 2)
 ODE (stiff)	SciPy solve_ivp(method="BDF")	fallback / simple cases
 Multirate	Custom scheduler	Phase 2 feature
+Sequential	Temporary solver	MVP only - 4-component Rankine cycles
+
+⚠️ MVP Implementation Note (Phase 0-1):
+
+The current implementation uses solve_sequential() — a temporary sequential propagation
+solver that handles only 4-component Rankine cycles (boiler → turbine → condenser → pump).
+This solver will be REMOVED in Phase 2 when SUNDIALS IDA integration is complete.
+
+Limitations:
+- Only supports exactly 4 components with hardcoded names
+- Sequential state propagation (not simultaneous DAE solution)
+- Uses root finding (brentq) on mass flow rate to close loop
+- Does not generalize to arbitrary topologies
+
+See docs/IDA_TRANSITION.md for Phase 2 migration plan.
+
 7.2 Failure Recovery
 
 Reduce timestep

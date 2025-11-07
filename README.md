@@ -8,6 +8,23 @@ The Thermal System Simulator is a Python-based tool for modeling single-phase fl
 
 **Current Status**: MVP - Single-phase flow, lumped (0D) components
 
+### Solver Status
+
+⚠️ **Important**: The current steady-state solver is temporary and has limitations:
+
+- ✅ **`solve_sequential()`**: Temporary sequential solver (currently working)
+  - **Limitation**: Only supports 4-component Rankine cycles (boiler → turbine → condenser → pump)
+  - **Status**: Functional but will be removed in Phase 2
+- 🚧 **`solve_steady_state()` with SUNDIALS IDA**: Under development
+  - **Target**: Phase 2 - Will support arbitrary component topologies
+  - **See**: `docs/IDA_TRANSITION.md` for migration plan
+- ✅ **`solve()`**: Transient BDF solver (working for ODE systems)
+
+**For production use**, wait until Phase 2 IDA integration is complete. Current solver is suitable for:
+- Simple Rankine cycle demonstrations
+- MVP validation and testing
+- Component development and testing
+
 **Key Features**:
 - **Typed Port System**: Type-safe connections prevent physically invalid configurations
 - **Automatic Conservation**: Reference-sharing mechanism enforces mass/energy conservation
@@ -70,8 +87,8 @@ graph.connect(turbine.outlet, condenser.inlet)
 graph.connect(condenser.outlet, pump.inlet)
 graph.connect(pump.outlet, boiler.inlet)
 
-# Solve
-result = graph.solve(t_span=(0, 1000))
+# Solve for steady state (using temporary sequential solver)
+result = graph.solve_sequential()
 
 # Extract results
 turbine_state = graph.get_component_state(result, 'turbine')
