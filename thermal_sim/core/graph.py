@@ -156,6 +156,18 @@ class ThermalGraph:
                 # (ports are already shared via reference, so no synchronization needed)
                 res = comp.residual(local_state, comp.ports, t)
 
+                # Debug check: detect NaN/Inf in residuals
+                if np.any(np.isnan(res)):
+                    raise ValueError(
+                        f"NaN detected in residual for component '{comp.name}'. "
+                        f"State: {local_state}, Residual: {res}"
+                    )
+                if np.any(np.isinf(res)):
+                    raise ValueError(
+                        f"Inf detected in residual for component '{comp.name}'. "
+                        f"State: {local_state}, Residual: {res}"
+                    )
+
                 if res.shape != (size,):
                     raise ValueError(
                         f"Component {comp.name} returned residual of shape {res.shape}, "
@@ -322,6 +334,8 @@ class ThermalGraph:
             4. Adjust mass flow and repeat until convergence
 
         Limitations (why this is temporary):
+            - **Only supports 4-component Rankine cycles** (boiler→turbine→condenser→pump)
+            - Components must be named 'boiler', 'turbine', 'condenser', 'pump'
             - Only works for simple closed loops (not general graphs)
             - Less accurate than simultaneous solution
             - Doesn't handle coupled dynamics or differential equations
@@ -386,12 +400,18 @@ class ThermalGraph:
         # Initial guess for mass flow rate
         mdot_guess = 100.0
 
+        # ⚠️ TODO_IDA: The entire loop_error() function below is TEMPORARY and will be REMOVED.
+        # It exists only because we're using sequential propagation + root finding instead of
+        # simultaneous DAE solution. IDA will solve all equations together, making this obsolete.
         def loop_error(mdot):
             """
             Compute loop closure error for given mass flow rate.
 
-            TODO_IDA: This function becomes obsolete with simultaneous DAE solution.
-            IDA will enforce all residuals = 0 simultaneously, including loop closure.
+            ⚠️ TEMPORARY FUNCTION - Will be removed in Phase 2.
+
+            This function is part of the sequential solver workaround. With SUNDIALS IDA,
+            loop closure will be automatically enforced by simultaneous solution of all
+            component residuals - no manual propagation or root finding needed.
             """
             # TODO_IDA: Error handling for invalid states won't be needed
             # IDA's implicit solver handles constraints better
