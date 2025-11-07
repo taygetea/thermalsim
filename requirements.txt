@@ -2,6 +2,9 @@
 numpy>=1.24.0
 scipy>=1.10.0
 
+# DAE solver (SUNDIALS wrapper)
+scikits.odes>=2.7.0
+
 # Thermodynamic properties
 CoolProp>=6.4.0
 

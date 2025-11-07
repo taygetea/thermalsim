@@ -58,13 +58,13 @@ class Pump(Component):
 
     def get_variables(self):
         return [
-            Variable('h_out', kind='algebraic', initial=1e5, units='J/kg'),
-            Variable('W_shaft', kind='algebraic', initial=1e5, units='W'),
+            Variable('h_out', kind='algebraic', initial=2.0e5, units='J/kg'),  # Compressed liquid
+            Variable('W_shaft', kind='algebraic', initial=1.3e6, units='W'),   # ~1.3 MW pump work
             Variable('mdot', kind='algebraic', initial=100.0, units='kg/s'),
         ]
 
     def get_initial_state(self):
-        return np.array([1e5, 1e5, 100.0])
+        return np.array([2.0e5, 1.3e6, 100.0])
 
     def residual(self, state, ports, t):
         h_out, W_shaft, mdot = state

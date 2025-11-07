@@ -22,11 +22,16 @@ def main():
     P_high = 10e6   # 10 MPa (high pressure)
     P_low = 10e3    # 10 kPa (condenser pressure)
 
-    # Create components
+    # For a saturated Rankine cycle at these pressures:
+    # h_liquid_low = 0.192 MJ/kg, h_vapor_high = 2.725 MJ/kg
+    # Delta_h = 2.52 MJ/kg per kg/s
+    # For mdot = 100 kg/s, Q_in ≈ 252 MW
+
+    # Create components with matched heat transfer
     boiler = ConstantPressureHeater(
         name='boiler',
         P=P_high,
-        Q=100e6,     # 100 MW heat input
+        Q=252e6,     # 252 MW heat input (matched to cycle)
         fluid='Water'
     )
 
@@ -40,7 +45,7 @@ def main():
     condenser = ConstantPressureHeater(
         name='condenser',
         P=P_low,
-        Q=-80e6,     # 80 MW heat rejection (negative = cooling)
+        Q=-173e6,    # 173 MW heat rejection (matched to cycle)
         fluid='Water'
     )
 
@@ -68,24 +73,20 @@ def main():
         for w in warnings:
             print(f"  {w}")
 
-    # Solve
-    print("Solving Rankine cycle...")
-    result = graph.solve(
-        t_span=(0, 1000),  # Simulate 1000 seconds
-        rtol=1e-6,
-        atol=1e-8
-    )
+    # Solve for steady state
+    print("Solving Rankine cycle for steady state...")
+    result = graph.solve_steady_state()
 
     if result.success:
-        print(f"✓ Solution converged in {len(result.t)} time steps")
+        print(f"✓ Solution converged (residual norm: {np.linalg.norm(result.fun):.2e})")
 
         # Extract results
         turbine_state = graph.get_component_state(result, 'turbine')
         pump_state = graph.get_component_state(result, 'pump')
 
         # Turbine state: [h_out, W_shaft, mdot]
-        W_turbine = turbine_state[1, -1]  # Final turbine power
-        W_pump = pump_state[1, -1]        # Final pump power
+        W_turbine = turbine_state[1, 0]  # Steady-state turbine power
+        W_pump = pump_state[1, 0]        # Steady-state pump power
 
         Q_in = boiler.Q
         W_net = W_turbine - W_pump

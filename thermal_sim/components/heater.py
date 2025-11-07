@@ -56,15 +56,31 @@ class ConstantPressureHeater(Component):
         }
 
     def get_variables(self):
+        # Set initial guess based on operating pressure and heat addition
+        # For water: low P → h~0.2 MJ/kg, high P liquid → h~1.4 MJ/kg, high P vapor → h~2.7 MJ/kg
+        if self.P > 1e6:  # High pressure
+            if self.Q > 0:  # Boiler (heating)
+                h_initial = 2.7e6  # Saturated vapor
+            else:  # High pressure cooler
+                h_initial = 1.4e6  # Saturated liquid
+        else:  # Low pressure
+            h_initial = 2e5  # Saturated liquid at low P
+
         return [
-            Variable('h_out', kind='algebraic', initial=1e6, units='J/kg'),
+            Variable('h_out', kind='algebraic', initial=h_initial, units='J/kg'),
             Variable('mdot', kind='algebraic', initial=100.0, units='kg/s'),
         ]
 
     def get_initial_state(self):
-        # Reasonable defaults for water
-        h0 = 1e6  # ~239°C saturated liquid at 10 MPa
-        mdot0 = 100.0  # kg/s
+        # Use same logic as get_variables for consistency
+        if self.P > 1e6:
+            if self.Q > 0:
+                h0 = 2.7e6
+            else:
+                h0 = 1.4e6
+        else:
+            h0 = 2e5
+        mdot0 = 100.0
         return np.array([h0, mdot0])
 
     def residual(self, state, ports, t):

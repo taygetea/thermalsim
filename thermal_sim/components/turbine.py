@@ -58,13 +58,13 @@ class Turbine(Component):
 
     def get_variables(self):
         return [
-            Variable('h_out', kind='algebraic', initial=2e6, units='J/kg'),
-            Variable('W_shaft', kind='algebraic', initial=1e6, units='W'),
+            Variable('h_out', kind='algebraic', initial=1.9e6, units='J/kg'),  # Two-phase after expansion
+            Variable('W_shaft', kind='algebraic', initial=80e6, units='W'),    # ~80 MW for typical cycle
             Variable('mdot', kind='algebraic', initial=100.0, units='kg/s'),
         ]
 
     def get_initial_state(self):
-        return np.array([2e6, 1e6, 100.0])
+        return np.array([1.9e6, 80e6, 100.0])
 
     def residual(self, state, ports, t):
         h_out, W_shaft, mdot = state

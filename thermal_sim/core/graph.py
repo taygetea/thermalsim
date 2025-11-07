@@ -11,6 +11,7 @@ The graph is responsible for:
 from typing import List, Tuple, Callable, Dict, Optional
 import numpy as np
 from scipy.integrate import solve_ivp
+from scipy.optimize import root
 import warnings
 
 from thermal_sim.core.component import Component
@@ -222,6 +223,82 @@ class ThermalGraph:
         for comp in self.components:
             offset = self._component_offsets[comp.name]
             result.state_names[comp.name] = comp.get_state_names()
+
+        return result
+
+    def solve_steady_state(self, method: str = 'hybr', **solver_options) -> object:
+        """
+        Find steady-state solution using root finding.
+
+        This is the recommended solver for pure algebraic systems where all variables
+        are in steady state (no time dynamics). Uses scipy.optimize.root to find
+        the state vector that satisfies all residual equations simultaneously.
+
+        Args:
+            method: Root finding algorithm (default 'hybr' - modified Powell hybrid)
+                Options: 'hybr', 'lm' (Levenberg-Marquardt), 'broyden1', 'df-sane'
+            **solver_options: Additional arguments passed to scipy.optimize.root
+                Common options:
+                    tol: Tolerance for termination (default solver-specific)
+                    options: Dict of solver-specific options
+
+        Returns:
+            Result object with attributes:
+                .x: Solution state vector
+                .success: Whether solver converged
+                .message: Solver status message
+                .fun: Final residual values (should be near zero)
+                .nfev: Number of function evaluations
+
+        Note:
+            For steady-state problems, this is more appropriate than solve() which
+            uses a transient ODE solver. The residual equations f(x) = 0 are solved
+            directly without introducing artificial dynamics.
+
+        Example:
+            result = graph.solve_steady_state()
+            if result.success:
+                turbine_state = graph.get_component_state(result, 'turbine')
+        """
+        residual_func, y0 = self.assemble()
+
+        # Wrap residual function with error handling (time is irrelevant at steady state)
+        def steady_residual(y):
+            try:
+                return residual_func(0.0, y)
+            except (ValueError, RuntimeError) as e:
+                # If CoolProp encounters invalid state during iteration,
+                # return large residuals to guide solver away from unphysical regions
+                return np.full_like(y, 1e10)
+
+        # Try solving with more robust options
+        solver_opts = {
+            'ftol': 1e-8,
+            'xtol': 1e-8,
+            'maxfev': 10000,
+        }
+        solver_opts.update(solver_options)
+
+        result = root(steady_residual, y0, method=method, options=solver_opts)
+
+        if not result.success:
+            warnings.warn(f"Steady-state solver failed: {result.message}")
+
+        # Attach metadata for compatibility with solve() interface
+        result.component_names = [c.name for c in self.components]
+        result.component_offsets = self._component_offsets.copy()
+        result.state_names = {}
+        for comp in self.components:
+            offset = self._component_offsets[comp.name]
+            result.state_names[comp.name] = comp.get_state_names()
+
+        # For compatibility with get_component_state, reshape x to look like y
+        # y normally has shape [n_states, n_timepoints], make it [n_states, 1]
+        result.y = result.x.reshape(-1, 1)
+        result.t = np.array([0.0])  # Single time point at steady state
+
+        # Trigger final residual evaluation to update all port values
+        _ = residual_func(0.0, result.x)
 
         return result
 
