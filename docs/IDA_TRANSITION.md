@@ -1,5 +1,25 @@
 # SUNDIALS IDA Transition Guide (Phase 2)
 
+## TL;DR - Quick Start for Implementation
+
+**Goal**: Replace temporary sequential solver with SUNDIALS IDA for proper DAE solving.
+
+**Critical Steps**:
+1. Install: `pip install scikits.odes`
+2. Edit `thermal_sim/core/graph.py`:
+   - Replace existing `solve_steady_state()` method with IDA version (see Step 2)
+   - **CRITICAL**: Include the `residual_func_ida` adapter (signature mismatch!)
+3. Update `examples/rankine_cycle.py`: `solve_sequential()` → `solve_steady_state()`
+4. Delete `solve_sequential()` method entirely
+5. Run tests: Should get same ~31% efficiency
+6. Update docs to remove "temporary solver" warnings
+
+**Most Common Pitfall**: Forgetting the residual function adapter. IDA needs `(t, y, yp, result)` signature, we have `(t, y) -> array`.
+
+**If You Get Stuck**: See troubleshooting section, especially "TypeError about residual function signature"
+
+---
+
 ## Overview
 
 This document provides a detailed roadmap for transitioning from the temporary sequential solver to the proper SUNDIALS IDA DAE solver. This transition is **Phase 2** of the project roadmap.
@@ -7,6 +27,49 @@ This document provides a detailed roadmap for transitioning from the temporary s
 **Current Status (Phase 1 - MVP)**: Using `solve_sequential()` - a temporary workaround that propagates states around the cycle sequentially and uses root finding to close the loop.
 
 **Phase 2 Goal**: Replace with `solve_steady_state()` using SUNDIALS IDA - a proper DAE solver that solves all equations simultaneously.
+
+## Quick Reference: Files to Modify
+
+For quick orientation, here are ALL files that need changes in Phase 2:
+
+### Code Changes:
+1. **`thermal_sim/core/graph.py`** (CRITICAL)
+   - Replace `solve_steady_state()` method (lines ~229-315)
+   - Delete `solve_sequential()` method (lines ~317-545)
+   - Remove all `# TODO_IDA:` comments throughout file
+
+2. **`examples/rankine_cycle.py`**
+   - Line ~77-80: Change `solve_sequential()` → `solve_steady_state()`
+   - Remove TODO_IDA comments
+
+3. **`requirements.txt`**
+   - Uncomment `scikits.odes>=2.7.0`
+
+### Documentation Changes:
+4. **`README.md`**
+   - Remove "Solver Status" warning section (lines 11-27)
+   - Update Quick Start example to use `solve_steady_state()`
+
+5. **`ARCHITECTURE.md`**
+   - Remove Section 7.1 MVP implementation note about sequential solver
+   - Update solver table
+
+6. **`CLAUDE.md`**
+   - Remove sequential solver from development workflow
+   - Update solver section
+
+7. **`docs/IDA_TRANSITION.md`** (this file)
+   - Mark as COMPLETED at top
+
+### Test Changes:
+8. **`tests/integration/test_rankine.py`**
+   - Keep sequential solver tests for validation comparison
+   - Add new IDA-based tests
+
+### No Changes Needed:
+- ✅ All component files (`thermal_sim/components/*.py`) - residuals are permanent
+- ✅ `thermal_sim/core/port.py`, `component.py`, `variable.py` - no changes
+- ✅ `thermal_sim/properties/coolprop_wrapper.py` - no changes
 
 ## Why This Transition is Necessary
 
@@ -45,11 +108,27 @@ from scikits.odes import dae
 print("SUNDIALS IDA available!")
 ```
 
-### Step 2: Update `ThermalGraph.solve_steady_state()`
+### Step 2: Replace `ThermalGraph.solve_steady_state()` Method
 
 **File**: `thermal_sim/core/graph.py`
 
-**Current Implementation** (lines ~305-513):
+**⚠️ Important Notes**:
+- There's an **existing** `solve_steady_state()` method (lines ~229-315) that uses scipy's root finder
+- This existing method **does not work** (hence why we created `solve_sequential()`)
+- **REPLACE** the existing `solve_steady_state()` entirely with the IDA implementation below
+- Do NOT add a new method - overwrite the old one
+
+**Existing Method to Replace** (lines ~229-315):
+```python
+def solve_steady_state(self, method: str = 'hybr', **solver_options) -> object:
+    """
+    Find steady-state solution using root finding.
+    ...
+    """
+    # Uses scipy.optimize.root - this doesn't work well for our system
+```
+
+**Also in File** - Temporary solver to DELETE later (lines ~317-545):
 ```python
 def solve_sequential(self, max_iter: int = 100, tol: float = 1e-6):
     """⚠️ TEMPORARY SOLVER - REPLACE WITH SUNDIALS IDA (Phase 2) ⚠️"""
@@ -89,8 +168,21 @@ def solve_steady_state(self, t_span=(0, 1), rtol=1e-6, atol=1e-8):
     """
     from scikits.odes import dae
 
-    # Assemble system
+    # Assemble system - returns residual_func(t, y) -> array
     residual_func, y0 = self.assemble()
+
+    # CRITICAL: IDA needs signature (t, y, yp, result) not (t, y) -> array
+    # Create adapter to convert between signatures
+    def residual_func_ida(t, y, yp, result):
+        """
+        Adapter for IDA's residual function signature.
+
+        IDA expects: f(t, y, yp, result) that populates result array
+        We have: f(t, y) that returns array
+
+        For steady-state: yp (derivatives) are all zero and can be ignored
+        """
+        result[:] = residual_func(t, y)
 
     # For steady-state, all variables are algebraic (no differential equations)
     algvar_flags = np.ones(len(y0))  # 1 = algebraic variable
@@ -99,10 +191,10 @@ def solve_steady_state(self, t_span=(0, 1), rtol=1e-6, atol=1e-8):
     # For steady-state, y' = 0 initially
     yp0 = np.zeros(len(y0))
 
-    # Create DAE solver
+    # Create DAE solver with adapted residual function
     solver = dae(
         'ida',
-        residual_func,  # f(t, y, yp, result)
+        residual_func_ida,  # Use adapter, not residual_func directly!
         algebraic_vars_idx=algvar_flags,
         rtol=rtol,
         atol=atol,
@@ -116,9 +208,8 @@ def solve_steady_state(self, t_span=(0, 1), rtol=1e-6, atol=1e-8):
     if solution.flag >= 0:  # Success
         y_final = solution.values.y[-1]
 
-        # Evaluate final residual
-        residual_final = np.zeros(len(y0))
-        residual_func(t_span[1], y_final, yp0, residual_final)
+        # Evaluate final residual using original function
+        residual_final = residual_func(t_span[1], y_final)
 
         return type('DAESolution', (), {
             'success': True,
@@ -139,10 +230,16 @@ def solve_steady_state(self, t_span=(0, 1), rtol=1e-6, atol=1e-8):
 
 **Key Changes**:
 1. Import `from scikits.odes import dae`
-2. Set all variables as algebraic: `algvar_flags = np.ones(len(y0))`
-3. Initialize derivatives to zero: `yp0 = np.zeros(len(y0))`
-4. Create IDA solver with algebraic variable flags
-5. Return standardized solution object
+2. **CRITICAL**: Create `residual_func_ida` adapter to convert signature
+   - Current `assemble()` returns `(t, y) -> array`
+   - IDA requires `(t, y, yp, result)` that populates result
+3. Set all variables as algebraic: `algvar_flags = np.ones(len(y0))`
+4. Initialize derivatives to zero: `yp0 = np.zeros(len(y0))`
+5. Create IDA solver with adapted residual function
+6. Return standardized solution object
+
+**Why the Adapter is Needed**:
+The current architecture keeps components clean by having `residual()` methods return arrays. IDA uses an in-place modification pattern for performance. The adapter bridges these two designs without requiring changes to component code.
 
 ### Step 3: Update Component Initial Conditions
 
@@ -217,15 +314,41 @@ result = graph.solve_steady_state()
 3. Test with modified cycle topologies (e.g., reheat Rankine)
 4. Verify residual norms are below tolerance
 
-### Step 7: Update Documentation
+### Step 7: Update requirements.txt
+
+**File**: `requirements.txt`
+
+**Current**: Contains placeholder comment for scikits.odes
+```
+# scikits.odes>=2.7.0  # For Phase 2 - SUNDIALS IDA integration
+```
+
+**Update to**:
+```
+scikits.odes>=2.7.0  # SUNDIALS IDA for DAE solving
+```
+
+### Step 8: Update Documentation
 
 **Files to Update**:
 - `README.md`: Change solver description
-- `ARCHITECTURE.md`: Update Section 8 (Solver Infrastructure)
+- `ARCHITECTURE.md`: Update Section 7.1 (Solver Infrastructure)
 - `CLAUDE.md`: Remove sequential solver references
 - `docs/IDA_TRANSITION.md`: Mark as "COMPLETED" at top
 
-**README.md Example**:
+**README.md Changes**:
+
+1. Remove "Solver Status" section (lines 11-27) - no longer temporary!
+2. Update Quick Start example (line 73-74):
+```python
+# Old
+result = graph.solve_sequential()
+
+# New
+result = graph.solve_steady_state()
+```
+
+**README.md Solver Section to Add**:
 ```markdown
 ## Solver
 
@@ -290,6 +413,23 @@ Use this checklist when performing the Phase 2 transition:
 - **Residuals**: IDA may achieve lower residual norms
 
 ## Troubleshooting Phase 2 Issues
+
+### Issue: TypeError about residual function signature
+
+**Symptoms**:
+- `TypeError: residual_func() takes 2 positional arguments but 4 were given`
+- Error during solver setup or first iteration
+
+**Cause**: Forgot to use the adapter - passed `residual_func` directly to IDA instead of `residual_func_ida`
+
+**Solution**:
+Make sure you have the adapter function defined and use it:
+```python
+def residual_func_ida(t, y, yp, result):
+    result[:] = residual_func(t, y)
+
+solver = dae('ida', residual_func_ida, ...)  # Use adapter!
+```
 
 ### Issue: IDA fails to converge
 
