@@ -28,7 +28,22 @@ This document provides a detailed roadmap for transitioning from the temporary s
 
 **Phase 2 Goal**: Replace with `solve_steady_state()` using SUNDIALS IDA - a proper DAE solver that solves all equations simultaneously.
 
-## Quick Reference: Files to Modify
+### Post-Transition Architecture
+
+After Phase 2 completion, the simulator will have **two permanent solver entry points**:
+
+- **`solve_steady_state()`** — Steady-state DAE solution via SUNDIALS IDA
+  - Used for finding equilibrium states
+  - Handles pure algebraic systems (all derivatives = 0)
+  - Generalizes to arbitrary component topologies
+
+- **`solve()`** — Transient integration via BDF (scipy's solve_ivp)
+  - Used for time-dependent simulations
+  - Handles ODE systems and simple dynamics
+
+The temporary `solve_sequential()` method will be **completely removed**. There will be no "collapsing" of solvers - these two methods serve distinct purposes and will both remain permanent parts of the architecture.
+
+## Files Requiring Modification
 
 For quick orientation, here are ALL files that need changes in Phase 2:
 
@@ -185,7 +200,8 @@ def solve_steady_state(self, t_span=(0, 1), rtol=1e-6, atol=1e-8):
         result[:] = residual_func(t, y)
 
     # For steady-state, all variables are algebraic (no differential equations)
-    algvar_flags = np.ones(len(y0))  # 1 = algebraic variable
+    # IDA expects indices of algebraic variables (or boolean mask)
+    algvar_flags = np.arange(len(y0))  # All variables are algebraic
 
     # SUNDIALS IDA requires derivatives y' as well as y
     # For steady-state, y' = 0 initially
@@ -233,13 +249,34 @@ def solve_steady_state(self, t_span=(0, 1), rtol=1e-6, atol=1e-8):
 2. **CRITICAL**: Create `residual_func_ida` adapter to convert signature
    - Current `assemble()` returns `(t, y) -> array`
    - IDA requires `(t, y, yp, result)` that populates result
-3. Set all variables as algebraic: `algvar_flags = np.ones(len(y0))`
+3. Set all variables as algebraic: `algvar_flags = np.arange(len(y0))`
+   - Alternatively use boolean mask: `[True] * len(y0)`
 4. Initialize derivatives to zero: `yp0 = np.zeros(len(y0))`
 5. Create IDA solver with adapted residual function
 6. Return standardized solution object
 
 **Why the Adapter is Needed**:
 The current architecture keeps components clean by having `residual()` methods return arrays. IDA uses an in-place modification pattern for performance. The adapter bridges these two designs without requiring changes to component code.
+
+**Note on Future Dynamic Variables**:
+
+In MVP (Phase 1-2), all state variables are algebraic - we're solving steady-state problems where all derivatives are zero. This is why we set:
+- `algvar_flags = np.arange(len(y0))` - All variables are algebraic
+- `yp0 = np.zeros(len(y0))` - All derivatives are zero
+
+In **future phases** (Phase 3+), when dynamic components are introduced (e.g., thermal capacitance, fluid inertia), the system will include both differential and algebraic variables:
+
+```python
+# Future: Mixed DAE system example
+algvar_flags = []  # List of algebraic variable indices only
+# If variables 0, 1, 3 are algebraic and 2, 4 are differential:
+algvar_flags = [0, 1, 3]
+
+# Or using boolean mask (True = algebraic, False = differential):
+algvar_mask = [True, True, False, True, False]  # Same example
+```
+
+At that point, components will declare variable types in `get_variables()` with `kind='differential'` vs `kind='algebraic'`, and the graph will build the appropriate index arrays.
 
 ### Step 3: Update Component Initial Conditions
 
@@ -313,6 +350,42 @@ result = graph.solve_steady_state()
 2. Test convergence from poor initial guesses
 3. Test with modified cycle topologies (e.g., reheat Rankine)
 4. Verify residual norms are below tolerance
+
+**Template for New IDA Tests**:
+```python
+def test_rankine_ida_converges():
+    """IDA solver should converge for Rankine cycle"""
+    graph = build_rankine_cycle()
+
+    result = graph.solve_steady_state()
+
+    assert result.success, f"IDA solver failed: {result.message}"
+    assert np.all(np.isfinite(result.x)), "Solution contains NaN or Inf"
+    assert np.linalg.norm(result.fun) < 1e-6, "Residual norm too large"
+
+
+def test_rankine_ida_efficiency():
+    """IDA solver should produce correct thermal efficiency"""
+    graph = build_rankine_cycle()
+
+    result = graph.solve_steady_state()
+    assert result.success
+
+    turbine_state = graph.get_component_state(result, 'turbine')
+    pump_state = graph.get_component_state(result, 'pump')
+
+    W_turbine = turbine_state[1, -1]
+    W_pump = pump_state[1, -1]
+    Q_in = 252e6  # Must match component definition
+
+    efficiency = (W_turbine - W_pump) / Q_in
+
+    # Should match sequential solver within tolerance
+    assert 0.30 < efficiency < 0.35, \
+        f"Efficiency {efficiency:.1%} outside expected range"
+```
+
+**Strategy**: Keep the sequential solver tests temporarily to validate that IDA produces equivalent results, then remove them once validated.
 
 ### Step 7: Update requirements.txt
 
@@ -395,6 +468,51 @@ Use this checklist when performing the Phase 2 transition:
   - [ ] Component powers should match (±1%)
   - [ ] Mass flow rates should match (±0.1%)
 
+### Completion Protocol
+
+When all checklist items above are complete:
+
+1. **Run full test suite** one final time:
+   ```bash
+   pytest tests/ -v --cov=thermal_sim
+   ```
+
+2. **Verify example runs successfully**:
+   ```bash
+   python examples/rankine_cycle.py
+   # Should show efficiency ~31% using IDA
+   ```
+
+3. **Commit changes** with descriptive message:
+   ```bash
+   git add .
+   git commit -m "Phase 2: SUNDIALS IDA integration complete
+
+   - Replace solve_steady_state() with IDA implementation
+   - Remove temporary solve_sequential() method
+   - Update all examples and tests
+   - Remove TODO_IDA comments
+   - Update documentation
+
+   All tests passing. Rankine cycle achieves 31.3% efficiency with IDA."
+   git push
+   ```
+
+4. **Tag release** as v0.2.0:
+   ```bash
+   git tag -a v0.2.0 -m "Phase 2: SUNDIALS IDA integration"
+   git push origin v0.2.0
+   ```
+
+5. **Update this file's status** at the bottom to:
+   ```
+   **Status**: COMPLETED — IDA integrated
+   **Completion Date**: [date]
+   **Effective Version**: v0.2.0
+   ```
+
+6. **Archive this file** (optional) by moving to `docs/archive/IDA_TRANSITION.md`
+
 ## Expected Behavior Changes
 
 ### Performance
@@ -405,6 +523,9 @@ Use this checklist when performing the Phase 2 transition:
 ### Convergence
 - **Robustness**: Better - handles larger deviations from initial guess
 - **Failure Modes**: Different error messages (IDA-specific)
+  - Error codes available via `solution.flag` attribute
+  - Negative flag values indicate failures (see IDA documentation)
+  - Consider logging `solution.flag` for debugging convergence issues
 - **Tolerance**: More consistent across different cycle configurations
 
 ### Results
@@ -539,3 +660,12 @@ However, this adapter is usually not needed - just define `residual_func` with t
 **Created**: 2025-11-07
 **Status**: ACTIVE - Phase 2 implementation pending
 **Next Review**: When Phase 2 begins
+
+**Note**: After completing Phase 2, update this status block to:
+```
+**Document Version**: 1.0.0
+**Created**: 2025-11-07
+**Status**: ✅ COMPLETED — IDA integrated
+**Completion Date**: [completion date]
+**Effective Version**: v0.2.0
+```
