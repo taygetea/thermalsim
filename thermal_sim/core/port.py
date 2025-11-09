@@ -94,14 +94,16 @@ class HeatPort(Port):
 
 
 @dataclass
-class SignalPort(Port):
+class ScalarPort(Port):
     """
-    Represents a control signal or measurement (future use).
+    Represents a scalar control signal or measurement.
+
+    Used for control systems (PID controllers, sensors, actuators).
 
     Attributes:
         name: Unique identifier
-        direction: 'in' for actuator, 'out' for sensor
-        value: Signal value (units depend on context)
+        direction: 'in' for actuator/command, 'out' for sensor/measurement
+        value: Scalar signal value (units depend on context)
     """
     name: str
     direction: Literal['in', 'out']
@@ -110,7 +112,11 @@ class SignalPort(Port):
     component: Optional[object] = field(default=None, repr=False)
 
     def compatible_with(self, other: Port) -> bool:
-        """Signal ports connect to signal ports"""
-        if not isinstance(other, SignalPort):
+        """Scalar ports connect to scalar ports with opposite direction"""
+        if not isinstance(other, ScalarPort):
             return False
         return self.direction != other.direction
+
+    def __repr__(self) -> str:
+        comp_name = self.component.name if self.component else "unattached"
+        return f"ScalarPort({comp_name}.{self.name}, {self.direction})"
