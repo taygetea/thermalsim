@@ -72,6 +72,307 @@ docs/
 
 **Key: ⭐ = Core file, frequently referenced**
 
+## Detailed File Guide
+
+### Core Module (`thermal_sim/core/`)
+
+**`port.py`** - Typed port system for component connections
+- Defines `Port` base class and specialized ports (`MassFlowPort`, `HeatPort`)
+- Ports have direction ('in' or 'out') and type-specific properties
+- Connection validation prevents incompatible port connections
+- Reference sharing: connected ports reference same object (automatic conservation)
+
+**`variable.py`** - State variable metadata
+- `Variable` class defines state variables with metadata
+- Fields: name, kind ('algebraic' or 'differential'), initial guess, units
+- Used by components to declare their state variables
+- Supports future DAE capability (differential equations)
+
+**`component.py`** - Component base class
+- Abstract base class `Component` that all components inherit from
+- Defines interface: `get_variables()`, `get_initial_state()`, `residual()`
+- Components define physics as residual equations: f(x) = 0
+- No solver logic in components (separation of concerns)
+
+**`graph.py`** - System topology manager and solver interface
+- `ThermalGraph` class manages component graph
+- Methods: `add_component()`, `connect()`, `validate_topology()`
+- `assemble()` builds global residual function from components
+- Multi-backend solvers:
+  - `solve_steady_state()` - Steady-state (scipy, diffeqpy, sequential)
+  - `solve_sequential()` - Sequential propagation (initialization helper)
+  - `solve()` - Transient ODE solver (scipy BDF)
+- State management and result extraction
+
+### Components Library (`thermal_sim/components/`)
+
+**`heater.py`** - `ConstantPressureHeater`
+- Adds/removes heat at constant pressure
+- Used for boilers (Q > 0) and condensers (Q < 0)
+- Equations: Energy balance, mass continuity
+- State variables: h_out, mdot
+
+**`turbine.py`** - `Turbine`
+- Isentropic expansion with efficiency
+- Extracts work from high-pressure fluid
+- Equations: Isentropic relation, power output, pressure constraint
+- State variables: h_out, W_shaft, mdot
+
+**`pump.py`** - `Pump`
+- Isentropic compression with efficiency
+- Increases fluid pressure (requires work input)
+- Equations: Isentropic relation, power input, pressure constraint
+- State variables: h_out, W_shaft, mdot
+
+**`pipe.py`** - `Pipe`
+- Simple pipe with pressure drop
+- Minimal component for testing
+- Equations: Pressure drop, enthalpy conservation
+- State variables: P_out, mdot
+
+### Properties (`thermal_sim/properties/`)
+
+**`coolprop_wrapper.py`** - `FluidProperties`
+- Wrapper around CoolProp for thermodynamic properties
+- Methods: `enthalpy()`, `temperature()`, `density()`, `entropy()`, etc.
+- LRU caching for performance (avoids redundant CoolProp calls)
+- Handles unit conversions internally (Pa, K, J/kg)
+
+### Tests (`tests/`)
+
+**`tests/unit/`** - Unit tests for individual modules
+- `test_ports.py` - Port creation, compatibility checking
+- `test_component.py` - Component interface, heater/turbine functionality
+- `test_graph.py` - Graph assembly, connections, simple loops
+
+**`tests/integration/`** - Full system tests
+- `test_rankine.py` - End-to-end Rankine cycle tests
+  - Tests steady-state solver (scipy with sequential init)
+  - Tests energy balance, mass conservation, efficiency
+  - Multiple backend tests (scipy, sequential, diffeqpy)
+
+### Examples (`examples/`)
+
+**`rankine_cycle.py`** - Main demonstration
+- Complete Rankine cycle: boiler → turbine → condenser → pump
+- Uses `solve_steady_state(backend='scipy')` with sequential initialization
+- Validates efficiency (30-35%), energy balance, mass conservation
+- Good starting point for understanding the framework
+
+### Documentation (`docs/`)
+
+**`ARCHITECTURE.md`** - Design philosophy and long-term vision
+- Mathematical foundation: M(x)·ẋ = f(x,t)
+- Solver strategy and phase roadmap
+- Why certain design decisions were made
+- Future phases (two-phase, controls, multirate)
+
+**`MVP_SPEC.md`** - Detailed implementation guide for Phase 0-1
+- Component-by-component specifications
+- Solver requirements and validation criteria
+- What's explicitly NOT implemented in MVP
+
+**`IDA_TRANSITION.md`** - Phase 2 transition guide (COMPLETED)
+- Originally planned SUNDIALS IDA integration
+- Documents why we used diffeqpy/NonlinearSolve instead
+- Kept for reference
+
+**`PHASE2_IMPLEMENTATION_PLAN.md`** - Phase 2 actual implementation
+- Multi-backend solver architecture
+- Sequential initialization strategy
+- Zero tech debt justification
+
+**`PHASE3_PLAN.md`** - Phase 3 implementation plan
+- Two-phase flow support
+- Dynamic components (differential equations)
+- Control systems (PID, valves)
+- Transient DAE solver
+
+**`CLAUDE.md`** - THIS FILE
+- Quick reference for AI assistants working on the project
+- Common tasks, file locations, development guidelines
+
+### Root Level Files
+
+**`README.md`** - User-facing documentation
+- Project overview, installation, quick start
+- Running examples and tests
+- Current capabilities and limitations
+
+**`requirements.txt`** - Python dependencies
+- Core: numpy, scipy, CoolProp
+- Optional: diffeqpy (Julia backend)
+- Testing: pytest, pytest-cov
+
+**`setup.py`** - Package configuration
+- Defines thermal_sim as installable package
+- Development mode: `uv pip install -e .`
+
+**`.gitignore`** - Git exclusions
+- Python cache (`__pycache__`, `.pyc`)
+- Virtual environments (`.venv`, `venv`)
+- Test outputs, IDE files
+
+## Environment Setup and uv Usage
+
+### Understanding the Environment
+
+**This project uses `uv` for Python package management**, not traditional venv activation.
+
+**What is uv?**
+- Modern Python package manager (faster than pip)
+- Manages virtual environments automatically
+- No need to manually activate/deactivate venvs
+- Use `uv run <command>` to run commands in the environment
+
+**Where is the environment?**
+- Virtual environment location: `.venv/` in project root
+- Created automatically by uv
+- Contains: Python 3.12+, all dependencies from requirements.txt
+
+### Common uv Commands
+
+**Running Python scripts:**
+```bash
+# Wrong (doesn't use venv):
+python examples/rankine_cycle.py
+
+# Correct (uses uv-managed venv):
+uv run python examples/rankine_cycle.py
+```
+
+**Running tests:**
+```bash
+# Run all tests
+uv run pytest
+
+# Run with coverage
+uv run pytest --cov=thermal_sim --cov-report=html
+
+# Run specific test file
+uv run pytest tests/integration/test_rankine.py -v
+```
+
+**Installing dependencies:**
+```bash
+# Install project in editable mode (creates .venv if needed)
+uv pip install -e .
+
+# Install specific package
+uv pip install matplotlib
+
+# Install from requirements
+uv pip install numpy scipy CoolProp
+```
+
+**Checking installed packages:**
+```bash
+uv pip list
+```
+
+**Python interpreter location:**
+```bash
+# uv uses: .venv/bin/python3
+which python  # Shows system Python (not what uv uses!)
+uv run which python  # Shows .venv/bin/python3 (correct)
+```
+
+### Why No Manual venv Activation?
+
+**Traditional approach (not used here):**
+```bash
+source .venv/bin/activate  # Manual activation
+python examples/rankine.py
+deactivate
+```
+
+**uv approach (what we use):**
+```bash
+uv run python examples/rankine.py  # Automatic venv usage
+```
+
+**Benefits:**
+- No forgetting to activate/deactivate
+- Consistent environment across sessions
+- Faster package operations
+- Explicit about which Python is used
+
+### Installation Issues
+
+**If you see "ModuleNotFoundError":**
+```bash
+# You probably ran: python script.py
+# Instead run:
+uv run python script.py
+```
+
+**If .venv is missing:**
+```bash
+# Reinstall project to recreate .venv
+uv pip install -e .
+```
+
+**If dependencies are missing:**
+```bash
+# Install core dependencies
+uv pip install numpy scipy CoolProp pytest pytest-cov
+
+# Or install from requirements.txt (once created)
+uv pip install -r requirements.txt
+```
+
+### Julia/diffeqpy Setup (Phase 2+)
+
+**Julia is auto-managed by diffeqpy:**
+```bash
+# Install diffeqpy (first time)
+uv pip install diffeqpy
+
+# First run auto-installs Julia 1.12.1 via jill.py
+uv run python -c "from diffeqpy import de"  # Takes 2-3 min first time
+
+# Julia location: ~/.julia/
+# DifferentialEquations.jl precompiled automatically
+```
+
+**Testing diffeqpy:**
+```bash
+uv run python test_nonlinearsolve.py  # Verifies NonlinearSolve.jl works
+```
+
+### IDE Setup
+
+**VS Code:**
+- Python extension should detect `.venv/bin/python3`
+- If not, use Command Palette: "Python: Select Interpreter"
+- Choose `.venv/bin/python3`
+
+**Terminal usage:**
+- Always use `uv run` prefix
+- Or manually activate if needed: `source .venv/bin/activate`
+
+### Troubleshooting
+
+**Problem:** "command not found: uv"
+**Solution:** Install uv: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+
+**Problem:** "ModuleNotFoundError" even with uv run
+**Solution:**
+```bash
+uv pip install -e .  # Reinstall project
+uv pip install numpy scipy CoolProp  # Install core deps
+```
+
+**Problem:** diffeqpy fails with Julia errors
+**Solution:**
+```bash
+# Remove Julia cache and reinstall
+rm -rf ~/.julia
+uv pip uninstall diffeqpy
+uv pip install diffeqpy
+uv run python -c "from diffeqpy import de"  # Reinstalls Julia
+```
+
 ## Key Design Principles
 
 1. **Layered Architecture**: Physics, topology, and numerics are distinct modules
