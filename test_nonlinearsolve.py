@@ -28,10 +28,10 @@ print("         Expected: x ≈ 0.7071, y ≈ 0.7071")
 def simple_nonlinear(u, p):
     """Nonlinear residual function: f(u) = 0"""
     x, y = u
-    return np.array([
+    return [
         x**2 + y**2 - 1.0,  # Circle
         y - x                # Line
-    ])
+    ]
 
 u0 = np.array([0.5, 0.5])  # Initial guess
 
@@ -65,9 +65,9 @@ print("\n[3/3] Testing with larger system (10 variables)...")
 
 def large_nonlinear(u, p):
     """10-variable test: sum(x_i) = 10, x_i² = i"""
-    residuals = np.zeros(10)
+    residuals = []
     for i in range(10):
-        residuals[i] = u[i]**2 - (i + 1)
+        residuals.append(u[i]**2 - (i + 1))
     # Add constraint: sum = 10
     residuals[0] += np.sum(u) - 10.0
     return residuals

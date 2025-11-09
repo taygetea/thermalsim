@@ -74,13 +74,13 @@ def main():
             print(f"  {w}")
 
     # Solve for steady state
-    # TODO_IDA Phase 2: Replace solve_sequential() with solve_steady_state() once SUNDIALS IDA is integrated
-    # The sequential solver is a temporary workaround for the coupled algebraic system
-    print("Solving Rankine cycle (using temporary sequential solver)...")
-    result = graph.solve_sequential()  # TEMPORARY - will be solve_steady_state() with IDA
+    # Multi-stage solver: tries scipy first, falls back to sequential initialization if needed
+    print("Solving Rankine cycle steady state...")
+    result = graph.solve_steady_state(backend='scipy')
 
     if result.success:
-        print(f"✓ Solution converged (residual norm: {np.linalg.norm(result.fun):.2e})")
+        print(f"✓ Solution converged using: {result.solver_used}")
+        print(f"  Residual norm: {np.linalg.norm(result.fun):.2e}")
 
         # Extract results
         turbine_state = graph.get_component_state(result, 'turbine')
