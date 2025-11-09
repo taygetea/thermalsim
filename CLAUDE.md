@@ -345,40 +345,56 @@ Avoid quality-based lookups (Q) in MVP.
 
 *This section will be updated as work progresses*
 
-### Phase 0: Project Setup
+### Phase 0: Project Setup ✅ COMPLETE
 - [x] Create repository structure
 - [x] Write specification documents
-- [ ] Set up Python package structure
-- [ ] Configure pytest
-- [ ] Create requirements.txt
+- [x] Set up Python package structure
+- [x] Configure pytest
+- [x] Create requirements.txt
 
-### Phase 1: Core Infrastructure
-- [ ] Implement port types (port.py)
-- [ ] Implement variable metadata (variable.py)
-- [ ] Implement component base class (component.py)
-- [ ] Implement graph kernel (graph.py)
-- [ ] Implement property wrapper (coolprop_wrapper.py)
+### Phase 1: Core Infrastructure ✅ COMPLETE
+- [x] Implement port types (port.py)
+- [x] Implement variable metadata (variable.py)
+- [x] Implement component base class (component.py)
+- [x] Implement graph kernel (graph.py)
+- [x] Implement property wrapper (coolprop_wrapper.py)
 
-### Phase 2: Component Library
-- [ ] Implement ConstantPressureHeater
-- [ ] Implement Turbine
-- [ ] Implement Pump
-- [ ] Implement Pipe
+### Phase 1: Component Library ✅ COMPLETE
+- [x] Implement ConstantPressureHeater
+- [x] Implement Turbine
+- [x] Implement Pump
+- [x] Implement Pipe
 
-### Phase 3: Integration
-- [ ] Create simple 2-component example
-- [ ] Create full Rankine cycle example
-- [ ] Write integration tests
-- [ ] Validate against textbook values
+### Phase 1: Integration ✅ COMPLETE
+- [x] Create simple 2-component example
+- [x] Create full Rankine cycle example
+- [x] Write integration tests
+- [x] Validate against textbook values
 
-### Phase 4: Documentation
-- [ ] Write README.md
-- [ ] Complete API docstrings
-- [ ] Write technical report
-- [ ] Add usage examples
+### Phase 2: Solver Improvements ✅ COMPLETE
+- [x] Multi-backend solve_steady_state() (scipy, diffeqpy, sequential)
+- [x] Automatic sequential initialization for simultaneous solvers
+- [x] Sequential solver reframed as permanent initialization helper
+- [x] diffeqpy/NonlinearSolve.jl integration
+- [x] Graceful fallback chain
+- [x] All steady-state tests passing (22/26 total)
+- [x] Documentation updates
+
+### Phase 1: Documentation ✅ COMPLETE
+- [x] Write README.md
+- [x] Complete API docstrings
+- [x] Write ARCHITECTURE.md
+- [x] Write CLAUDE.md
+- [x] Add usage examples
+
+### Future Phases (see ARCHITECTURE.md)
+- Phase 3: Two-phase flow + control systems
+- Phase 4: Multi-rate solver + MPC
+- Phase 5: Exotic domains (fusion, cryogenics)
+- Phase 6: GPU/distributed computing
 
 ---
 
-**Document Version**: 0.1.0
-**Last Updated**: 2025-11-07
+**Document Version**: 0.2.0
+**Last Updated**: 2025-11-09
 **See Also**: ARCHITECTURE.md (design rationale), MVP_SPEC.md (implementation details)

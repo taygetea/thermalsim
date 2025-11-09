@@ -130,26 +130,34 @@ def assemble(self):
     return residual_func, y0
 
 7 · Solver Layer
-7.1 Primary Backends
+7.1 Primary Backends (Phase 2 Complete)
 Type	Library	Notes
-DAE	SUNDIALS IDA	canonical solver (Phase 2)
-ODE (stiff)	SciPy solve_ivp(method="BDF")	fallback / simple cases
-Multirate	Custom scheduler	Phase 2 feature
-Sequential	Temporary solver	MVP only - 4-component Rankine cycles
+Steady-state (primary)	scipy.optimize.root	Fast simultaneous solver with sequential init
+Steady-state (robust)	diffeqpy/NonlinearSolve.jl	Julia backend for stiff systems
+Initialization	Sequential propagation	Provides basin-of-attraction for simultaneous methods
+ODE (transient)	SciPy solve_ivp(method="BDF")	For transient dynamics
+Multirate	Custom scheduler	Future phase
 
-⚠️ MVP Implementation Note (Phase 0-1):
+✅ Phase 2 Implementation (Current):
 
-The current implementation uses solve_sequential() — a temporary sequential propagation
-solver that handles only 4-component Rankine cycles (boiler → turbine → condenser → pump).
-This solver will be REMOVED in Phase 2 when SUNDIALS IDA integration is complete.
+The simulator uses a multi-backend steady-state solver with automatic initialization:
 
-Limitations:
-- Only supports exactly 4 components with hardcoded names
-- Sequential state propagation (not simultaneous DAE solution)
-- Uses root finding (brentq) on mass flow rate to close loop
-- Does not generalize to arbitrary topologies
+**solve_steady_state(backend='scipy')**:
+1. Try scipy.optimize.root direct → often fails from default initial guess
+2. On failure: use solve_sequential() to generate thermodynamically consistent initial guess
+3. Retry scipy with sequential initial conditions → typically succeeds
+4. On failure: return sequential result as fallback
 
-See docs/IDA_TRANSITION.md for Phase 2 migration plan.
+**Result**: "scipy (sequential init)" - combines accuracy of simultaneous solving
+with robustness of sequential initialization.
+
+**Architecture Rationale**:
+- Sequential solver is PERMANENT (not temporary) - provides initialization service
+- Simultaneous solvers are more accurate when they converge
+- Sequential propagation ensures thermodynamically feasible starting point
+- Graceful degradation: scipy → sequential init → diffeqpy → sequential fallback
+
+See docs/PHASE2_IMPLEMENTATION_PLAN.md for implementation details.
 
 7.2 Failure Recovery
 

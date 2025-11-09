@@ -6,24 +6,20 @@ An extensible, physics-based framework for simulating coupled thermal-hydraulic 
 
 The Thermal System Simulator is a Python-based tool for modeling single-phase fluid loops, power cycles (Rankine, Brayton), and thermal management systems. It uses a graph-based architecture where components are connected via typed ports, and the framework automatically assembles and solves the governing equations.
 
-**Current Status**: MVP - Single-phase flow, lumped (0D) components
+**Current Status**: Phase 2 Complete - Multi-backend steady-state solver with automatic initialization
 
-### Solver Status
+### Solver Capabilities
 
-⚠️ **Important**: The current steady-state solver is temporary and has limitations:
-
-- ✅ **`solve_sequential()`**: Temporary sequential solver (currently working)
-  - **Limitation**: Only supports 4-component Rankine cycles (boiler → turbine → condenser → pump)
-  - **Status**: Functional but will be removed in Phase 2
-- 🚧 **`solve_steady_state()` with SUNDIALS IDA**: Under development
-  - **Target**: Phase 2 - Will support arbitrary component topologies
-  - **See**: `docs/IDA_TRANSITION.md` for migration plan
+- ✅ **`solve_steady_state()`**: Multi-backend steady-state solver (Phase 2 complete)
+  - **Backends**: scipy (default), diffeqpy (Julia NonlinearSolve.jl), sequential
+  - **Features**: Automatic sequential initialization, graceful fallback chain
+  - **Architecture**: Combines accuracy of simultaneous methods with reliability of sequential solving
+  - **Status**: Production ready for Rankine cycles
+- ✅ **`solve_sequential()`**: Sequential propagation solver
+  - **Purpose**: Initialization helper and fallback for simultaneous solvers
+  - **Architecture**: Permanent component of solver strategy (not temporary)
+  - **Use case**: Generates thermodynamically consistent initial guesses
 - ✅ **`solve()`**: Transient BDF solver (working for ODE systems)
-
-**For production use**, wait until Phase 2 IDA integration is complete. Current solver is suitable for:
-- Simple Rankine cycle demonstrations
-- MVP validation and testing
-- Component development and testing
 
 **Key Features**:
 - **Typed Port System**: Type-safe connections prevent physically invalid configurations
@@ -87,13 +83,14 @@ graph.connect(turbine.outlet, condenser.inlet)
 graph.connect(condenser.outlet, pump.inlet)
 graph.connect(pump.outlet, boiler.inlet)
 
-# Solve for steady state (using temporary sequential solver)
-result = graph.solve_sequential()
+# Solve for steady state (multi-backend with automatic initialization)
+result = graph.solve_steady_state(backend='scipy')
 
 # Extract results
 turbine_state = graph.get_component_state(result, 'turbine')
-W_turbine = turbine_state[1, -1]  # Turbine power output
+W_turbine = turbine_state[1, 0]  # Turbine power output
 print(f"Turbine power: {W_turbine/1e6:.2f} MW")
+print(f"Solver used: {result.solver_used}")
 ```
 
 ## Running Examples
@@ -107,14 +104,15 @@ python examples/rankine_cycle.py
 
 Expected output:
 ```
-Solving Rankine cycle...
-✓ Solution converged in X time steps
+Solving Rankine cycle steady state...
+✓ Solution converged using: scipy (sequential init)
+  Residual norm: 2.98e-08
 
 Results:
-  Turbine power: 35.XX MW
-  Pump power: 0.XX MW
-  Net power: 35.XX MW
-  Thermal efficiency: 35.X%
+  Turbine power: 80.29 MW
+  Pump power: 1.29 MW
+  Net power: 79.00 MW
+  Thermal efficiency: 31.3%
 ✓ Efficiency in expected range (30-40%)
 ```
 
@@ -166,13 +164,18 @@ The simulator uses a layered architecture:
 1. **User Script**: Define components and connections
 2. **Graph Kernel**: Manages topology, validates connections, assembles equations
 3. **Component Library**: Physics models (each defines state variables + residual equations)
-4. **Solver Backend**: scipy's BDF solver (future: SUNDIALS IDA)
+4. **Solver Backend**: Multi-backend strategy
+   - **Primary**: scipy.optimize.root (fast simultaneous solver)
+   - **Advanced**: diffeqpy/NonlinearSolve.jl (robust for stiff systems)
+   - **Initialization**: Sequential propagation for good initial guesses
+   - **Fallback**: Automatic degradation chain ensures solution
 5. **Properties**: CoolProp for fluid properties
 
 Key design principles:
 - **Reference Sharing**: Connected ports share the same object → automatic conservation
 - **Residual Form**: All equations written as f(x) = 0 for solver
 - **SI Units Only**: No conversion overhead (Pa, K, J/kg, kg/s, W)
+- **Robust Initialization**: Sequential solver provides basin-of-attraction for simultaneous methods
 
 ## Adding a New Component
 
@@ -249,7 +252,7 @@ For questions or support, please open an issue on GitHub.
 
 ---
 
-**Version**: 0.1.0
-**Last Updated**: 2025-11-07
+**Version**: 0.2.0 (Phase 2 Complete)
+**Last Updated**: 2025-11-09
 **Python**: 3.9+
-**Status**: MVP - Active Development
+**Status**: Phase 2 - Multi-backend solver with automatic initialization
