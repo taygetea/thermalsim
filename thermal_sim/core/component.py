@@ -73,7 +73,8 @@ class Component(ABC):
     def residual(self,
                  state: np.ndarray,
                  ports: Dict[str, Port],
-                 t: float) -> np.ndarray:
+                 t: float,
+                 state_dot: np.ndarray | None = None) -> np.ndarray:
         """
         Compute residual vector for this component's equations.
 
@@ -83,11 +84,14 @@ class Component(ABC):
             state: This component's state variables (local slice of global state)
             ports: Dictionary mapping port names to Port objects (with current values)
             t: Current simulation time [s]
+            state_dot: Time derivatives (dx/dt) for differential variables.
+                      None for steady-state/algebraic systems (default).
+                      Provided by DAE solver for transient simulations.
 
         Returns:
             1D numpy array of residuals (same length as state vector)
 
-        Convention:
+        Convention - Algebraic systems (Phase 0-2):
             Residual form: f(x) = 0
 
             For example, if the physics is:
@@ -98,9 +102,26 @@ class Component(ABC):
 
             Solver will find state values that make residual[0] = 0.
 
+        Convention - DAE systems (Phase 3+):
+            For differential variables: residual = f(x,t) - dx/dt
+            For algebraic variables: residual = f(x,t)
+
+            For example, Tank with level dynamics:
+                d(level)/dt = (mdot_in - mdot_out) / (rho * A)
+
+            Write as residual:
+                residual[0] = (mdot_in - mdot_out)/(rho*A) - state_dot[0]
+
+            Algebraic constraint (outlet flow):
+                residual[1] = mdot_out - valve_cv * sqrt(dP)
+
         Side effects:
             Should update outlet port values based on computed state.
             Example: ports['outlet'].h = h_out
+
+        Backward compatibility:
+            Existing components work unchanged because state_dot=None by default
+            and algebraic variables don't reference state_dot.
         """
         pass
 

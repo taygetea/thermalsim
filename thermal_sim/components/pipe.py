@@ -59,7 +59,7 @@ class Pipe(Component):
     def get_initial_state(self):
         return np.array([1e6, 100.0])
 
-    def residual(self, state, ports, t):
+    def residual(self, state, ports, t, state_dot=None):
         P_out, mdot = state
 
         h_in = ports['inlet'].h

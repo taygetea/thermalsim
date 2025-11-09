@@ -66,7 +66,7 @@ class Turbine(Component):
     def get_initial_state(self):
         return np.array([1.9e6, 80e6, 100.0])
 
-    def residual(self, state, ports, t):
+    def residual(self, state, ports, t, state_dot=None):
         h_out, W_shaft, mdot = state
 
         # Inlet conditions

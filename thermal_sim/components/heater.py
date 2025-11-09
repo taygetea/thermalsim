@@ -83,7 +83,7 @@ class ConstantPressureHeater(Component):
         mdot0 = 100.0
         return np.array([h0, mdot0])
 
-    def residual(self, state, ports, t):
+    def residual(self, state, ports, t, state_dot=None):
         h_out, mdot = state
 
         # Get inlet conditions from connected component

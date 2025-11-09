@@ -66,7 +66,7 @@ class Pump(Component):
     def get_initial_state(self):
         return np.array([2.0e5, 1.3e6, 100.0])
 
-    def residual(self, state, ports, t):
+    def residual(self, state, ports, t, state_dot=None):
         h_out, W_shaft, mdot = state
 
         h_in = ports['inlet'].h

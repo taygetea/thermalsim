@@ -180,6 +180,107 @@ class ThermalGraph:
 
         return residual_func, y0
 
+    def assemble_dae(self):
+        """
+        Assemble DAE system for transient solver (Phase 3+).
+
+        Constructs residual function, initial conditions, and metadata
+        for DAE solver: M(x)·dx/dt = f(x,t)
+
+        Returns:
+            Tuple of:
+                residual_func: Function(t, y, ydot) -> residuals
+                y0: Initial state vector
+                ydot0: Initial derivative vector (zeros)
+                algebraic_vars: Boolean list (True = algebraic, False = differential)
+
+        Usage:
+            >>> residual_func, y0, ydot0, alg_vars = graph.assemble_dae()
+            >>> # Pass to DAE solver (scipy, diffeqpy, etc.)
+
+        Note:
+            This is the DAE-aware version of assemble(). For steady-state problems
+            (dx/dt = 0), use assemble() or solve_steady_state() instead.
+        """
+        if not self.components:
+            raise ValueError("Cannot assemble empty graph")
+
+        # Build state mapping
+        self._build_state_mapping()
+
+        # Collect initial conditions and variable metadata
+        y0_parts = []
+        ydot0_list = []
+        algebraic_vars = []
+
+        for comp in self.components:
+            y0_parts.append(comp.get_initial_state())
+
+            # Get variable types
+            for var in comp.get_variables():
+                if var.kind == 'algebraic':
+                    ydot0_list.append(0.0)  # Algebraic vars have zero derivative
+                    algebraic_vars.append(True)
+                elif var.kind == 'differential':
+                    ydot0_list.append(0.0)  # Initial derivative (will be computed by solver)
+                    algebraic_vars.append(False)
+                else:
+                    raise ValueError(
+                        f"Unknown variable kind '{var.kind}' for {comp.name}.{var.name}. "
+                        f"Must be 'algebraic' or 'differential'"
+                    )
+
+        y0 = np.concatenate(y0_parts)
+        ydot0 = np.array(ydot0_list)
+
+        # Build DAE residual function
+        def residual_func(t: float, y: np.ndarray, ydot: np.ndarray) -> np.ndarray:
+            """
+            Global DAE residual function: F(t, y, dy/dt) = 0
+
+            Args:
+                t: Current time [s]
+                y: Global state vector
+                ydot: Global derivative vector (dy/dt)
+
+            Returns:
+                Global residual vector
+            """
+            residuals = []
+
+            for comp in self.components:
+                # Extract this component's state and derivative slices
+                offset = self._component_offsets[comp.name]
+                size = comp.get_state_size()
+                local_state = y[offset:offset+size]
+                local_state_dot = ydot[offset:offset+size]
+
+                # Compute component residual (now includes state_dot)
+                res = comp.residual(local_state, comp.ports, t, local_state_dot)
+
+                # Debug checks
+                if np.any(np.isnan(res)):
+                    raise ValueError(
+                        f"NaN detected in residual for component '{comp.name}'. "
+                        f"State: {local_state}, State_dot: {local_state_dot}, Residual: {res}"
+                    )
+                if np.any(np.isinf(res)):
+                    raise ValueError(
+                        f"Inf detected in residual for component '{comp.name}'. "
+                        f"State: {local_state}, State_dot: {local_state_dot}, Residual: {res}"
+                    )
+                if res.shape != (size,):
+                    raise ValueError(
+                        f"Component {comp.name} returned residual of shape {res.shape}, "
+                        f"expected ({size},)"
+                    )
+
+                residuals.append(res)
+
+            return np.concatenate(residuals)
+
+        return residual_func, y0, ydot0, algebraic_vars
+
     def solve(self,
               t_span: Tuple[float, float],
               method: str = 'BDF',
