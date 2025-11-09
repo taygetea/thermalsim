@@ -281,6 +281,222 @@ class ThermalGraph:
 
         return residual_func, y0, ydot0, algebraic_vars
 
+    def solve_transient(self,
+                       tspan: Tuple[float, float] | np.ndarray,
+                       backend: str = 'scipy',
+                       **solver_options) -> object:
+        """
+        Solve transient DAE system: M(x)·dx/dt = f(x,t)
+
+        Integrates differential equations over time while maintaining
+        algebraic constraints. Uses steady-state as initial condition
+        unless custom IC provided.
+
+        Args:
+            tspan: (t_start, t_end) or array of time points [s]
+            backend: 'scipy' (default) or 'diffeqpy'
+            **solver_options:
+                y0: Optional initial condition (otherwise uses solve_steady_state)
+                method: Integration method ('BDF', 'Radau', etc.)
+                rtol, atol: Tolerances
+                max_step: Maximum time step
+
+        Returns:
+            Result object with:
+                .t: Time points
+                .y: State trajectory [n_vars, n_timepoints]
+                .success: Convergence flag
+                .message: Status message
+                .component_names, .component_offsets, .state_names: Metadata
+
+        Example:
+            >>> # Tank filling from steady-state
+            >>> result = graph.solve_transient(tspan=(0, 100))
+            >>> level_history = graph.get_component_state(result, 'tank')[0, :]
+
+        Note:
+            For pure algebraic systems (Phase 0-2), use solve_steady_state() instead.
+            This method is for systems with at least one differential variable.
+        """
+        # Get or compute initial condition
+        if 'y0' in solver_options:
+            y0 = solver_options.pop('y0')
+        else:
+            # Use steady-state as IC
+            print("Computing steady-state initial condition...")
+            ss_result = self.solve_steady_state()
+            if not ss_result.success:
+                warnings.warn(
+                    "Steady-state initialization failed. Using default initial conditions. "
+                    "Transient solution may not be physically meaningful."
+                )
+                _, y0, _, _ = self.assemble_dae()
+            else:
+                y0 = ss_result.x
+
+        # Assemble DAE system
+        residual_func, _, ydot0, algebraic_vars = self.assemble_dae()
+
+        # Check if system has differential variables
+        if all(algebraic_vars):
+            raise ValueError(
+                "System has no differential variables. "
+                "Use solve_steady_state() for pure algebraic systems."
+            )
+
+        if backend == 'scipy':
+            return self._solve_transient_scipy(
+                residual_func, y0, ydot0, tspan, algebraic_vars, **solver_options
+            )
+        elif backend == 'diffeqpy':
+            return self._solve_transient_diffeqpy(
+                residual_func, y0, ydot0, tspan, algebraic_vars, **solver_options
+            )
+        else:
+            raise ValueError(f"Unknown backend: {backend}")
+
+    def _solve_transient_scipy(self, residual_func, y0, ydot0, tspan,
+                              algebraic_vars, **solver_options):
+        """
+        Scipy backend for transient DAE solving.
+
+        Strategy: Use scipy's implicit BDF method and convert DAE residuals
+        to ODE form by solving algebraic constraints implicitly.
+        """
+        from scipy.integrate import solve_ivp
+        from scipy.optimize import fsolve
+
+        # Extract options
+        method = solver_options.pop('method', 'BDF')  # BDF for stiff systems
+        rtol = solver_options.pop('rtol', 1e-6)
+        atol = solver_options.pop('atol', 1e-8)
+
+        # Parse tspan
+        if isinstance(tspan, tuple):
+            t_start, t_end = tspan
+            t_eval = None
+        else:
+            t_start = tspan[0]
+            t_end = tspan[-1]
+            t_eval = tspan
+
+        # For semi-explicit DAE, we need to convert to ODE form
+        # Differential variables: dy/dt = f(y, t)
+        # Algebraic variables: solve g(y, t) = 0 at each time step
+
+        n_vars = len(y0)
+        diff_indices = [i for i, is_alg in enumerate(algebraic_vars) if not is_alg]
+        alg_indices = [i for i, is_alg in enumerate(algebraic_vars) if is_alg]
+
+        def ode_func(t, y):
+            """
+            Convert DAE residual to ODE form: dy/dt = F(t, y)
+
+            For differential vars: extract dy/dt from residual = f - dy/dt
+            For algebraic vars: solve f = 0 to maintain constraints
+            """
+            ydot = np.zeros(n_vars)
+
+            # If we have algebraic variables, solve them at this time instant
+            if alg_indices:
+                def alg_residual(y_alg_vals):
+                    """Residual for algebraic variables only"""
+                    y_temp = y.copy()
+                    y_temp[alg_indices] = y_alg_vals
+                    ydot_temp = np.zeros(n_vars)
+                    res = residual_func(t, y_temp, ydot_temp)
+                    return res[alg_indices]
+
+                # Solve algebraic constraints
+                y_alg_init = y[alg_indices]
+                y_alg_solution = fsolve(alg_residual, y_alg_init, full_output=False)
+                y_new = y.copy()
+                y_new[alg_indices] = y_alg_solution
+            else:
+                y_new = y
+
+            # Compute residual with solved algebraic vars
+            res = residual_func(t, y_new, ydot)
+
+            # For differential vars, residual = f - dy/dt, so dy/dt = -residual + f
+            # Actually, residual = f - dy/dt, so dy/dt = f - residual
+            # Wait, let me think about the sign...
+            # In the Tank: residual = dlevel_dt - state_dot[0]
+            # So: 0 = dlevel_dt - state_dot[0]
+            # Therefore: state_dot[0] = dlevel_dt = f(...)
+            # So: residual = f - state_dot, meaning state_dot = f - residual
+
+            # Actually, rearranging: residual = f - ydot
+            # So: ydot = f - residual
+            # But we want ydot such that residual = 0
+            # If residual = f - ydot, then ydot = f when residual = 0
+
+            # Let me reconsider. The residual function is defined as:
+            # residual = computed_value - state_dot
+            # At solution, residual = 0, so: computed_value = state_dot
+            # Therefore: ydot = computed_value = residual + state_dot = residual (when state_dot=0)
+
+            # Actually in the DAE formulation with state_dot passed in:
+            # residual(t, y, ydot) should equal 0
+            # For differential: residual = f(y,t) - ydot
+            # So at solution: 0 = f(y,t) - ydot => ydot = f(y,t)
+
+            # To extract ydot, I solve: residual_func(t, y, ydot) = 0 for ydot
+            # For now, let's use a simpler approach:
+
+            # Compute residual with ydot = 0
+            ydot_trial = np.zeros(n_vars)
+            res_zero = residual_func(t, y_new, ydot_trial)
+
+            # For differential variables, extract derivative
+            # residual = f - ydot, so ydot = f = -residual (when ydot_trial = 0)
+            # No wait: residual = f - ydot_trial = f - 0 = f
+            # So f = residual, and we want ydot = f
+            ydot[diff_indices] = res_zero[diff_indices]
+
+            # Algebraic variables have zero derivative
+            ydot[alg_indices] = 0.0
+
+            return ydot
+
+        # Solve ODE
+        result = solve_ivp(
+            ode_func,
+            (t_start, t_end),
+            y0,
+            method=method,
+            t_eval=t_eval,
+            rtol=rtol,
+            atol=atol,
+            dense_output=True,
+            **solver_options
+        )
+
+        if not result.success:
+            warnings.warn(f"Transient solver failed: {result.message}")
+
+        # Attach metadata
+        result.component_names = [c.name for c in self.components]
+        result.component_offsets = self._component_offsets.copy()
+        result.state_names = {}
+        for comp in self.components:
+            result.state_names[comp.name] = comp.get_state_names()
+
+        return result
+
+    def _solve_transient_diffeqpy(self, residual_func, y0, ydot0, tspan,
+                                 algebraic_vars, **solver_options):
+        """
+        Diffeqpy backend for transient DAE solving (future implementation).
+
+        Julia's DifferentialEquations.jl has native DAE solvers (IDA, Rodas5, etc.)
+        that can handle differential-algebraic systems directly.
+        """
+        raise NotImplementedError(
+            "diffeqpy transient solver not yet implemented. "
+            "Use backend='scipy' for now."
+        )
+
     def solve(self,
               t_span: Tuple[float, float],
               method: str = 'BDF',
